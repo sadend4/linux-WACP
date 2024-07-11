@@ -93,8 +93,8 @@ struct process_symbol_args {
 	u64	   start;
 };
 
-static int find_func_symbol_cb(void *arg, const char *name, char type,
-			       u64 start)
+static int find_symbol_cb(void *arg, const char *name, char type,
+			  u64 start)
 {
 	struct process_symbol_args *args = arg;
 
@@ -110,36 +110,12 @@ static int find_func_symbol_cb(void *arg, const char *name, char type,
 	return 1;
 }
 
-static int find_any_symbol_cb(void *arg, const char *name,
-			      char type __maybe_unused, u64 start)
-{
-	struct process_symbol_args *args = arg;
-
-	if (strcmp(name, args->name))
-		return 0;
-
-	args->start = start;
-	return 1;
-}
-
 int kallsyms__get_function_start(const char *kallsyms_filename,
 				 const char *symbol_name, u64 *addr)
 {
 	struct process_symbol_args args = { .name = symbol_name, };
 
-	if (kallsyms__parse(kallsyms_filename, &args, find_func_symbol_cb) <= 0)
-		return -1;
-
-	*addr = args.start;
-	return 0;
-}
-
-int kallsyms__get_symbol_start(const char *kallsyms_filename,
-			       const char *symbol_name, u64 *addr)
-{
-	struct process_symbol_args args = { .name = symbol_name, };
-
-	if (kallsyms__parse(kallsyms_filename, &args, find_any_symbol_cb) <= 0)
+	if (kallsyms__parse(kallsyms_filename, &args, find_symbol_cb) <= 0)
 		return -1;
 
 	*addr = args.start;
@@ -511,7 +487,7 @@ size_t perf_event__fprintf_text_poke(union perf_event *event, struct machine *ma
 		struct addr_location al;
 
 		addr_location__init(&al);
-		al.map = maps__find(machine__kernel_maps(machine), tp->addr);
+		al.map = map__get(maps__find(machine__kernel_maps(machine), tp->addr));
 		if (al.map && map__load(al.map) >= 0) {
 			al.addr = map__map_ip(al.map, tp->addr);
 			al.sym = map__find_symbol(al.map, al.addr);
@@ -617,13 +593,13 @@ struct map *thread__find_map(struct thread *thread, u8 cpumode, u64 addr,
 	if (cpumode == PERF_RECORD_MISC_KERNEL && perf_host) {
 		al->level = 'k';
 		maps = machine__kernel_maps(machine);
-		load_map = !symbol_conf.lazy_load_kernel_maps;
+		load_map = true;
 	} else if (cpumode == PERF_RECORD_MISC_USER && perf_host) {
 		al->level = '.';
 	} else if (cpumode == PERF_RECORD_MISC_GUEST_KERNEL && perf_guest) {
 		al->level = 'g';
 		maps = machine__kernel_maps(machine);
-		load_map = !symbol_conf.lazy_load_kernel_maps;
+		load_map = true;
 	} else if (cpumode == PERF_RECORD_MISC_GUEST_USER && perf_guest) {
 		al->level = 'u';
 	} else {
@@ -641,7 +617,7 @@ struct map *thread__find_map(struct thread *thread, u8 cpumode, u64 addr,
 		return NULL;
 	}
 	al->maps = maps__get(maps);
-	al->map = maps__find(maps, al->addr);
+	al->map = map__get(maps__find(maps, al->addr));
 	if (al->map != NULL) {
 		/*
 		 * Kernel maps might be changed when loading symbols so loading
@@ -726,7 +702,7 @@ int machine__resolve(struct machine *machine, struct addr_location *al,
 	dso = al->map ? map__dso(al->map) : NULL;
 	dump_printf(" ...... dso: %s\n",
 		dso
-		? dso__long_name(dso)
+		? dso->long_name
 		: (al->level == 'H' ? "[hypervisor]" : "<not found>"));
 
 	if (thread__is_filtered(thread))
@@ -750,10 +726,10 @@ int machine__resolve(struct machine *machine, struct addr_location *al,
 	if (al->map) {
 		if (symbol_conf.dso_list &&
 		    (!dso || !(strlist__has_entry(symbol_conf.dso_list,
-						  dso__short_name(dso)) ||
-			       (dso__short_name(dso) != dso__long_name(dso) &&
+						  dso->short_name) ||
+			       (dso->short_name != dso->long_name &&
 				strlist__has_entry(symbol_conf.dso_list,
-						   dso__long_name(dso)))))) {
+						   dso->long_name))))) {
 			al->filtered |= (1 << HIST_FILTER__DSO);
 		}
 

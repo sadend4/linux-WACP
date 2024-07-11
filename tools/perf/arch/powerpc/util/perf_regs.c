@@ -4,7 +4,6 @@
 #include <regex.h>
 #include <linux/zalloc.h>
 
-#include "perf_regs.h"
 #include "../../../util/perf_regs.h"
 #include "../../../util/debug.h"
 #include "../../../util/event.h"
@@ -17,7 +16,7 @@
 #define PVR_POWER9		0x004E
 #define PVR_POWER10		0x0080
 
-static const struct sample_reg sample_reg_masks[] = {
+const struct sample_reg sample_reg_masks[] = {
 	SMPL_REG(r0, PERF_REG_POWERPC_R0),
 	SMPL_REG(r1, PERF_REG_POWERPC_R1),
 	SMPL_REG(r2, PERF_REG_POWERPC_R2),
@@ -226,14 +225,4 @@ uint64_t arch__intr_reg_mask(void)
 		mask |= extended_mask;
 	}
 	return mask;
-}
-
-uint64_t arch__user_reg_mask(void)
-{
-	return PERF_REGS_MASK;
-}
-
-const struct sample_reg *arch__sample_reg_masks(void)
-{
-	return sample_reg_masks;
 }

@@ -1,4 +1,6 @@
-#! /usr/bin/env python
+#! /usr/local/bin/python3.12
+# ! /usr/bin/env python
+
 # SPDX-License-Identifier: GPL-2.0
 # -*- python -*-
 # -*- coding: utf-8 -*-

@@ -302,54 +302,40 @@ static int unwind_spec_ehframe(struct dso *dso, struct machine *machine,
 	return 0;
 }
 
-struct read_unwind_spec_eh_frame_maps_cb_args {
-	struct dso *dso;
-	u64 base_addr;
-};
-
-static int read_unwind_spec_eh_frame_maps_cb(struct map *map, void *data)
-{
-
-	struct read_unwind_spec_eh_frame_maps_cb_args *args = data;
-
-	if (map__dso(map) == args->dso && map__start(map) - map__pgoff(map) < args->base_addr)
-		args->base_addr = map__start(map) - map__pgoff(map);
-
-	return 0;
-}
-
-
 static int read_unwind_spec_eh_frame(struct dso *dso, struct unwind_info *ui,
 				     u64 *table_data, u64 *segbase,
 				     u64 *fde_count)
 {
-	struct read_unwind_spec_eh_frame_maps_cb_args args = {
-		.dso = dso,
-		.base_addr = UINT64_MAX,
-	};
+	struct map_rb_node *map_node;
+	u64 base_addr = UINT64_MAX;
 	int ret, fd;
 
-	if (dso__data(dso)->eh_frame_hdr_offset == 0) {
+	if (dso->data.eh_frame_hdr_offset == 0) {
 		fd = dso__data_get_fd(dso, ui->machine);
 		if (fd < 0)
 			return -EINVAL;
 
 		/* Check the .eh_frame section for unwinding info */
 		ret = elf_section_address_and_offset(fd, ".eh_frame_hdr",
-						     &dso__data(dso)->eh_frame_hdr_addr,
-						     &dso__data(dso)->eh_frame_hdr_offset);
-		dso__data(dso)->elf_base_addr = elf_base_address(fd);
+						     &dso->data.eh_frame_hdr_addr,
+						     &dso->data.eh_frame_hdr_offset);
+		dso->data.elf_base_addr = elf_base_address(fd);
 		dso__data_put_fd(dso);
-		if (ret || dso__data(dso)->eh_frame_hdr_offset == 0)
+		if (ret || dso->data.eh_frame_hdr_offset == 0)
 			return -EINVAL;
 	}
 
-	maps__for_each_map(thread__maps(ui->thread), read_unwind_spec_eh_frame_maps_cb, &args);
+	maps__for_each_entry(thread__maps(ui->thread), map_node) {
+		struct map *map = map_node->map;
+		u64 start = map__start(map);
 
-	args.base_addr -= dso__data(dso)->elf_base_addr;
+		if (map__dso(map) == dso && start < base_addr)
+			base_addr = start;
+	}
+	base_addr -= dso->data.elf_base_addr;
 	/* Address of .eh_frame_hdr */
-	*segbase = args.base_addr + dso__data(dso)->eh_frame_hdr_addr;
-	ret = unwind_spec_ehframe(dso, ui->machine, dso__data(dso)->eh_frame_hdr_offset,
+	*segbase = base_addr + dso->data.eh_frame_hdr_addr;
+	ret = unwind_spec_ehframe(dso, ui->machine, dso->data.eh_frame_hdr_offset,
 				   table_data, fde_count);
 	if (ret)
 		return ret;
@@ -460,7 +446,7 @@ find_proc_info(unw_addr_space_t as, unw_word_t ip, unw_proc_info_t *pi,
 		return -EINVAL;
 	}
 
-	pr_debug("unwind: find_proc_info dso %s\n", dso__name(dso));
+	pr_debug("unwind: find_proc_info dso %s\n", dso->name);
 
 	/* Check the .eh_frame section for unwinding info */
 	if (!read_unwind_spec_eh_frame(dso, ui, &table_data, &segbase, &fde_count)) {
@@ -567,7 +553,6 @@ static int access_mem(unw_addr_space_t __maybe_unused as,
 		      int __write, void *arg)
 {
 	struct unwind_info *ui = arg;
-	const char *arch = perf_env__arch(ui->machine->env);
 	struct stack_dump *stack = &ui->sample->user_stack;
 	u64 start, end;
 	int offset;
@@ -580,7 +565,7 @@ static int access_mem(unw_addr_space_t __maybe_unused as,
 	}
 
 	ret = perf_reg_value(&start, &ui->sample->user_regs,
-			     perf_arch_reg_sp(arch));
+			     LIBUNWIND__ARCH_REG_SP);
 	if (ret)
 		return ret;
 
@@ -706,7 +691,7 @@ static int _unwind__prepare_access(struct maps *maps)
 {
 	void *addr_space = unw_create_addr_space(&accessors, 0);
 
-	maps__set_addr_space(maps, addr_space);
+	RC_CHK_ACCESS(maps)->addr_space = addr_space;
 	if (!addr_space) {
 		pr_err("unwind: Can't create unwind address space.\n");
 		return -ENOMEM;
@@ -729,7 +714,6 @@ static void _unwind__finish_access(struct maps *maps)
 static int get_entries(struct unwind_info *ui, unwind_entry_cb_t cb,
 		       void *arg, int max_stack)
 {
-	const char *arch = perf_env__arch(ui->machine->env);
 	u64 val;
 	unw_word_t ips[max_stack];
 	unw_addr_space_t addr_space;
@@ -737,7 +721,7 @@ static int get_entries(struct unwind_info *ui, unwind_entry_cb_t cb,
 	int ret, i = 0;
 
 	ret = perf_reg_value(&val, &ui->sample->user_regs,
-			     perf_arch_reg_ip(arch));
+			     LIBUNWIND__ARCH_REG_IP);
 	if (ret)
 		return ret;
 

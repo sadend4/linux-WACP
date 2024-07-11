@@ -17,7 +17,6 @@
 #include "event.h"
 #include "perf_regs.h"
 #include "callchain.h"
-#include "util/env.h"
 
 static char *debuginfo_path;
 
@@ -46,7 +45,6 @@ static int __report_module(struct addr_location *al, u64 ip,
 {
 	Dwfl_Module *mod;
 	struct dso *dso = NULL;
-	Dwarf_Addr base;
 	/*
 	 * Some callers will use al->sym, so we can't just use the
 	 * cheaper thread__find_map() here.
@@ -59,25 +57,13 @@ static int __report_module(struct addr_location *al, u64 ip,
 	if (!dso)
 		return 0;
 
-	/*
-	 * The generated JIT DSO files only map the code segment without
-	 * ELF headers.  Since JIT codes used to be packed in a memory
-	 * segment, calculating the base address using pgoff falls into
-	 * a different code in another DSO.  So just use the map->start
-	 * directly to pick the correct one.
-	 */
-	if (!strncmp(dso->long_name, "/tmp/jitted-", 12))
-		base = map__start(al->map);
-	else
-		base = map__start(al->map) - map__pgoff(al->map);
-
 	mod = dwfl_addrmodule(ui->dwfl, ip);
 	if (mod) {
 		Dwarf_Addr s;
 
 		dwfl_module_info(mod, NULL, &s, NULL, NULL, NULL, NULL, NULL);
-		if (s != base)
-			mod = NULL;
+		if (s != map__start(al->map) - map__pgoff(al->map))
+			mod = 0;
 	}
 
 	if (!mod) {
@@ -85,14 +71,14 @@ static int __report_module(struct addr_location *al, u64 ip,
 
 		__symbol__join_symfs(filename, sizeof(filename), dso->long_name);
 		mod = dwfl_report_elf(ui->dwfl, dso->short_name, filename, -1,
-				      base, false);
+				      map__start(al->map) - map__pgoff(al->map), false);
 	}
 	if (!mod) {
 		char filename[PATH_MAX];
 
 		if (dso__build_id_filename(dso, filename, sizeof(filename), false))
 			mod = dwfl_report_elf(ui->dwfl, dso->short_name, filename, -1,
-					      base, false);
+					      map__start(al->map) - map__pgoff(al->map), false);
 	}
 
 	if (mod) {
@@ -184,14 +170,12 @@ static bool memory_read(Dwfl *dwfl __maybe_unused, Dwarf_Addr addr, Dwarf_Word *
 			void *arg)
 {
 	struct unwind_info *ui = arg;
-	const char *arch = perf_env__arch(ui->machine->env);
 	struct stack_dump *stack = &ui->sample->user_stack;
 	u64 start, end;
 	int offset;
 	int ret;
 
-	ret = perf_reg_value(&start, &ui->sample->user_regs,
-			     perf_arch_reg_sp(arch));
+	ret = perf_reg_value(&start, &ui->sample->user_regs, PERF_REG_SP);
 	if (ret)
 		return false;
 
@@ -263,13 +247,12 @@ int unwind__get_entries(unwind_entry_cb_t cb, void *arg,
 	struct unwind_info *ui, ui_buf = {
 		.sample		= data,
 		.thread		= thread,
-		.machine	= maps__machine((thread__maps(thread))),
+		.machine	= RC_CHK_ACCESS(thread__maps(thread))->machine,
 		.cb		= cb,
 		.arg		= arg,
 		.max_stack	= max_stack,
 		.best_effort    = best_effort
 	};
-	const char *arch = perf_env__arch(ui_buf.machine->env);
 	Dwarf_Word ip;
 	int err = -EINVAL, i;
 
@@ -286,7 +269,7 @@ int unwind__get_entries(unwind_entry_cb_t cb, void *arg,
 	if (!ui->dwfl)
 		goto out;
 
-	err = perf_reg_value(&ip, &data->user_regs, perf_arch_reg_ip(arch));
+	err = perf_reg_value(&ip, &data->user_regs, PERF_REG_IP);
 	if (err)
 		goto out;
 
